@@ -216,7 +216,10 @@ void eng_step(Engine *e, float dt)
         gas_set_volume(&c->ch, eng_vol(e, cth));
 
         if (st == 0) {
-            gas_flow(&e->man, &c->ch, 2.0e-8, dt);
+            gas_flow(&e->man, &c->ch, 3.5e-8, dt);
+            c->ch.p_fuel = 0.7 * c->ch.p_fuel + 0.3 * e->man.p_fuel;
+            c->ch.p_o2 = 0.7 * c->ch.p_o2 + 0.3 * e->man.p_o2;
+            c->ch.p_inert = 1.0 - c->ch.p_fuel - c->ch.p_o2;
             c->fired = 0;
         }
         if (st == 3) {
@@ -243,7 +246,7 @@ void eng_step(Engine *e, float dt)
         t_gas += tg;
     }
 
-    t_fric = -0.018 * e->w - (e->w > 0 ? 0.8 : (e->w < 0 ? -0.8 : 0));
+    t_fric = -0.008 * e->w - (e->w > 0 ? 0.25 : 0);
     t_start = e->starter ? 28.0 : 0;
     alpha = (t_gas + t_fric + t_start) / IFLY;
     e->w += (float)(alpha * dt);

@@ -116,16 +116,24 @@ int main(void)
                             else if (seq[1] == 'A' && item)
                                 item--;
                         }
-                    } else if (menu)
-                        menu = 0;
-                    i = n;
+                    }
                 } else if (menu && (c == 'a' || c == 'A')) {
                     tab = (tab + 3) % 4;
                     item = 0;
                 } else if (menu && (c == 'd' || c == 'D')) {
                     tab = (tab + 1) % 4;
                     item = 0;
-                } else if (c == 'b' || c == 'B' || c == '\n' || c == '\r') {
+                } else if (menu && (c == 'w' || c == 'W')) {
+                    if (item)
+                        item--;
+                } else if (menu && (c == 's' || c == 'S')) {
+                    if (item + 1 < menu_nitem(tab))
+                        item++;
+                } else if (menu && (c == 'j' || c == 'J'))
+                    menu_adj(&e, tab, item, -1);
+                else if (menu && (c == 'l' || c == 'L'))
+                    menu_adj(&e, tab, item, 1);
+                else if (c == 'b' || c == 'B' || c == '\n' || c == '\r') {
                     e.autostart = 1;
                     e.ign = 1;
                     e.start_t = 0;
