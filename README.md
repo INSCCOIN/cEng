@@ -10,6 +10,11 @@ Inspired by Ange Yaghi’s Engine Simulator. This is **not** a port of that tree
 make
 ./cEng
 ```
+Do note, if you're on an ARM based CPU, you'll need to remove all o files.
+
+```
+rm -f *.o cEng
+```
 
 Rebuild from `.c` files on the device. Do not copy `.o` files from another CPU.
 
