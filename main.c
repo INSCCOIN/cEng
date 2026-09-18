@@ -125,10 +125,12 @@ int main(void)
                 } else if (menu && (c == 'd' || c == 'D')) {
                     tab = (tab + 1) % 4;
                     item = 0;
-                } else if (c == 'b' || c == 'B') {
-                    e.autostart ^= 1;
+                } else if (c == 'b' || c == 'B' || c == '\n' || c == '\r') {
+                    e.autostart = 1;
                     e.ign = 1;
-                    log_line(e.autostart ? "autostart on" : "autostart off");
+                    e.start_t = 0;
+                    e.starter = 1;
+                    log_line("autostart");
                 } else if (c == '+' || c == '=') {
                     zoom *= 1.15f;
                     if (zoom > 2.4f)

@@ -7,12 +7,12 @@
 
 #define PATM 101325.0
 #define FUEL_MJ 44.0e6
-#define FUEL_MOLMASS 0.11423
+#define FUEL_MM 0.11423
 #define MOL_AFR 12.5
+#define IFLY 0.18
 
-static float wrap4pi(float a)
+static float wrap(float a, float t)
 {
-    const float t = 4.f * (float)M_PI;
     while (a < 0)
         a += t;
     while (a >= t)
@@ -20,9 +20,9 @@ static float wrap4pi(float a)
     return a;
 }
 
-int eng_stroke(const Engine *e)
+int eng_stroke_at(float th)
 {
-    float d = e->th * (180.f / (float)M_PI);
+    float d = wrap(th, 4.f * (float)M_PI) * (180.f / (float)M_PI);
     if (d < 180)
         return 2;
     if (d < 360)
@@ -32,9 +32,17 @@ int eng_stroke(const Engine *e)
     return 1;
 }
 
-static double chamber_volume(const Engine *e)
+void eng_piston(const Engine *e, double th, double *pinx, double *piny, double *pis)
 {
-    double s = sin((double)e->th), c = cos((double)e->th);
+    double s = sin(th), c = cos(th);
+    *pinx = e->r * s;
+    *piny = -e->r * c;
+    *pis = e->r * c + sqrt(e->rod * e->rod - e->r * e->r * s * s);
+}
+
+double eng_vol(const Engine *e, double th)
+{
+    double s = sin(th), c = cos(th);
     double x = e->r * (1.0 - c) + (e->rod - sqrt(e->rod * e->rod - e->r * e->r * s * s));
     return e->vc + e->area * x;
 }
@@ -52,176 +60,201 @@ void eng_rebuild(Engine *e)
 
 void eng_init(Engine *e)
 {
+    int i;
     e->bore = 0.086f;
     e->stroke = 0.086f;
-    e->rod = 0.136f;
-    e->spark_deg = 8.f;
+    e->rod = 0.145f;
+    e->spark_deg = 12.f;
     e->atmo = (float)PATM;
     e->tamb = 293.f;
-    e->mix = 1.f;
-    e->throttle = 0.25f;
+    e->mix = 1.0f;
+    e->throttle = 0.35f;
     e->ign = 1;
+    for (i = 0; i < NC; i++) {
+        e->cyl[i].phase = (i & 1) ? M_PI : 0.0;
+        e->cyl[i].fire = i * (M_PI);
+    }
     eng_rebuild(e);
     eng_reset(e);
 }
 
 void eng_reset(Engine *e)
 {
-    double V;
-    e->th = 3.2f * (float)M_PI;
+    int i;
+    e->th = 0;
     e->w = 0;
     e->rpm = 0;
     e->starter = 0;
     e->autostart = 0;
-    e->fired = 0;
+    e->start_t = 0;
     e->work_acc = 0;
     e->fire_str = 0;
     e->exh_open = 0;
-    e->lit = 0;
-    e->travel_x = e->travel_y = 0;
-    e->flame_v = 12.0;
-    e->burn_eff = 0.75;
-    V = chamber_volume(e);
-    gas_init(&e->ch, e->atmo, V > 1e-6 ? V : 1e-5, e->tamb);
-    gas_init(&e->man, e->atmo * 0.4, 0.002, e->tamb);
-    gas_init(&e->exh, e->atmo, 0.004, e->tamb);
-    e->p = (float)gas_P(&e->ch);
-    e->t = (float)gas_T(&e->ch);
+    gas_init(&e->man, e->atmo * (0.3 + 0.7 * e->throttle), 0.0035, e->tamb);
+    gas_init(&e->exh, e->atmo, 0.006, e->tamb);
+    for (i = 0; i < NC; i++) {
+        double V = eng_vol(e, e->th + e->cyl[i].phase);
+        gas_init(&e->cyl[i].ch, e->atmo, V > 1e-6 ? V : 1e-5, e->tamb);
+        e->cyl[i].lit = e->cyl[i].fired = 0;
+        e->cyl[i].travel_x = e->cyl[i].travel_y = 0;
+        e->cyl[i].last_vol = V;
+        e->cyl[i].flame_v = 15;
+        e->cyl[i].burn_eff = 0.7;
+    }
+    e->p = (float)gas_P(&e->cyl[0].ch);
+    e->t = (float)gas_T(&e->cyl[0].ch);
     e->fuel = 0;
 }
 
-static void ignite_ange(Engine *e)
+static void ignite(Engine *e, Cyl *c)
 {
     double afr, eq;
-    if (e->lit)
+    if (c->lit)
         return;
-    if (e->ch.p_fuel <= 1e-6)
+    if (c->ch.p_fuel < 1e-5)
         return;
-    afr = e->ch.p_o2 / e->ch.p_fuel;
+    afr = c->ch.p_o2 / c->ch.p_fuel;
     eq = afr / MOL_AFR;
-    if (eq < 0.5 || eq > 1.9)
+    if (eq < 0.45 || eq > 2.1)
         return;
-    e->lit = 1;
-    e->fired = 1;
-    e->travel_x = 0;
-    e->travel_y = 0;
-    e->last_vol = e->ch.V;
-    e->flame_v = 8.0 + 20.0 * (gas_T(&e->ch) / 600.0);
-    if (e->flame_v > 40)
-        e->flame_v = 40;
-    e->burn_eff = 0.55 + 0.25 * e->mix;
-    if (e->burn_eff > 0.9)
-        e->burn_eff = 0.9;
+    c->lit = 1;
+    c->fired = 1;
+    c->travel_x = c->travel_y = 0;
+    c->last_vol = c->ch.V;
+    c->flame_v = 10.0 + 18.0 * (gas_T(&c->ch) / 700.0);
+    if (c->flame_v > 45)
+        c->flame_v = 45;
+    c->burn_eff = 0.5 + 0.3 * e->mix;
+    if (c->burn_eff > 0.92)
+        c->burn_eff = 0.92;
     e->fire_str = 1.f;
 }
 
-static void burn_ange(Engine *e, double dt)
+static void burn(Cyl *c, double bore, double area, double dt)
 {
-    double vol = e->ch.V;
-    double hx = e->bore * 0.5;
-    double hy = vol / ((double)e->area + 1e-12);
-    double lx, ly, bv, pbv, litv, n, fuel_mol, mass;
-    if (!e->lit)
+    double vol, hx, hy, lx, ly, bv, pbv, litv, n, fm, mass;
+    if (!c->lit)
         return;
-    lx = e->travel_x;
-    ly = e->travel_y * (vol / (e->last_vol > 1e-12 ? e->last_vol : vol));
-    e->travel_x = lx + dt * e->flame_v;
-    e->travel_y = ly + dt * e->flame_v;
-    if (e->travel_x > hx)
-        e->travel_x = hx;
-    if (e->travel_y > hy)
-        e->travel_y = hy;
-    if (e->travel_x <= lx && e->travel_y <= ly) {
-        e->lit = 0;
-        e->last_vol = vol;
+    vol = c->ch.V;
+    hx = bore * 0.5;
+    hy = vol / (area + 1e-12);
+    lx = c->travel_x;
+    ly = c->travel_y * (vol / (c->last_vol > 1e-12 ? c->last_vol : vol));
+    c->travel_x = lx + dt * c->flame_v;
+    c->travel_y = ly + dt * c->flame_v;
+    if (c->travel_x > hx)
+        c->travel_x = hx;
+    if (c->travel_y > hy)
+        c->travel_y = hy;
+    if (c->travel_x <= lx && c->travel_y <= ly) {
+        c->lit = 0;
+        c->last_vol = vol;
         return;
     }
-    bv = e->travel_x * e->travel_x * GAS_PI * e->travel_y;
+    bv = c->travel_x * c->travel_x * GAS_PI * c->travel_y;
     pbv = lx * lx * GAS_PI * ly;
     litv = bv - pbv;
     if (litv < 0)
         litv = 0;
-    n = (litv / vol) * e->ch.n;
-    fuel_mol = n * e->ch.p_fuel * e->burn_eff;
-    if (fuel_mol > e->ch.n * e->ch.p_fuel)
-        fuel_mol = e->ch.n * e->ch.p_fuel;
-    mass = fuel_mol * FUEL_MOLMASS;
-    gas_add_energy(&e->ch, mass * FUEL_MJ);
-    e->ch.p_fuel -= (e->ch.n > 0) ? fuel_mol / e->ch.n : 0;
-    if (e->ch.p_fuel < 0)
-        e->ch.p_fuel = 0;
-    e->ch.p_inert += (e->ch.n > 0) ? fuel_mol / e->ch.n : 0;
-    e->last_vol = vol;
+    n = (litv / (vol + 1e-12)) * c->ch.n;
+    fm = n * c->ch.p_fuel * c->burn_eff;
+    if (fm > c->ch.n * c->ch.p_fuel)
+        fm = c->ch.n * c->ch.p_fuel;
+    mass = fm * FUEL_MM;
+    gas_add_energy(&c->ch, mass * FUEL_MJ);
+    if (c->ch.n > 0) {
+        c->ch.p_fuel -= fm / c->ch.n;
+        c->ch.p_inert += fm / c->ch.n;
+        if (c->ch.p_fuel < 0)
+            c->ch.p_fuel = 0;
+    }
+    c->last_vol = vol;
 }
 
 void eng_step(Engine *e, float dt)
 {
-    double t_gas, t_fric, t_start, alpha;
-    int st;
-    double four, spark, th_old;
+    int i, st;
+    double t_gas = 0, t_fric, t_start, alpha;
     if (dt < 1e-4f)
         dt = 1e-4f;
-    if (dt > 0.005f)
-        dt = 0.005f;
+    if (dt > 0.004f)
+        dt = 0.004f;
 
-    e->th = wrap4pi(e->th + e->w * dt);
-    st = eng_stroke(e);
-    gas_set_volume(&e->ch, chamber_volume(e));
+    if (e->autostart) {
+        e->ign = 1;
+        e->start_t += dt;
+        if (e->rpm < 1400.f && e->start_t < 4.f)
+            e->starter = 1;
+        else {
+            e->starter = 0;
+            e->autostart = 0;
+        }
+    }
+
+    e->th = wrap(e->th + e->w * dt, 4.f * (float)M_PI);
 
     {
-        double ptarget = e->atmo * (0.25 + 0.75 * e->throttle);
+        double ptarget = e->atmo * (0.28 + 0.72 * e->throttle);
         double pm = gas_P(&e->man);
-        e->man.Ek += (ptarget - pm) * e->man.V * (GAS_DOF * 0.5) * 8.0 * dt;
+        e->man.Ek += (ptarget - pm) * e->man.V * (GAS_DOF * 0.5) * 12.0 * dt;
         if (e->man.Ek < 1)
             e->man.Ek = 1;
-        e->man.p_fuel = 0.06 * e->mix * e->throttle;
+        e->man.p_fuel = 0.055 * e->mix * (0.4 + 0.6 * e->throttle);
+        if (e->man.p_fuel > 0.12)
+            e->man.p_fuel = 0.12;
         e->man.p_o2 = 0.21 * (1.0 - e->man.p_fuel);
         e->man.p_inert = 1.0 - e->man.p_fuel - e->man.p_o2;
     }
 
-    if (st == 0)
-        gas_flow(&e->man, &e->ch, 1.2e-8, dt);
-    if (st == 3) {
-        gas_flow(&e->ch, &e->exh, 1.4e-8, dt);
-        e->exh_open = 1.f;
-        e->exh.n = e->atmo * e->exh.V / (GAS_R * e->tamb);
-        e->exh.Ek = e->tamb * (0.5 * GAS_DOF * e->exh.n * GAS_R);
-        e->exh.p_fuel = 0;
-        e->exh.p_o2 = 0.21;
-        e->exh.p_inert = 0.79;
-    } else
-        e->exh_open *= expf(-dt * 6.f);
+    e->exh_open = 0;
+    for (i = 0; i < NC; i++) {
+        Cyl *c = &e->cyl[i];
+        double cth = e->th + (float)c->phase;
+        double fth = wrap(e->th + (float)c->fire, 4.f * (float)M_PI);
+        double s, P, tg;
+        st = eng_stroke_at((float)fth);
+        gas_set_volume(&c->ch, eng_vol(e, cth));
 
-    four = 4.0 * M_PI;
-    spark = four - e->spark_deg * (M_PI / 180.0);
-    th_old = wrap4pi(e->th - e->w * dt);
-    if (e->ign && ((th_old < spark && e->th >= spark) || (th_old > e->th && e->th < 0.2f)))
-        ignite_ange(e);
+        if (st == 0) {
+            gas_flow(&e->man, &c->ch, 2.0e-8, dt);
+            c->fired = 0;
+        }
+        if (st == 3) {
+            gas_flow(&c->ch, &e->exh, 2.2e-8, dt);
+            e->exh_open = 1.f;
+            e->exh.n = e->atmo * e->exh.V / (GAS_R * e->tamb);
+            e->exh.Ek = e->tamb * (0.5 * GAS_DOF * e->exh.n * GAS_R);
+        }
 
-    if (st == 0)
-        e->fired = 0;
+        {
+            double four = 4.0 * M_PI;
+            double spark = four - e->spark_deg * (M_PI / 180.0);
+            double old = wrap((float)fth - e->w * dt, 4.f * (float)M_PI);
+            if (e->ign && ((old < spark && fth >= spark) || (old > fth && fth < 0.25)))
+                ignite(e, c);
+        }
+        burn(c, e->bore, e->area, dt);
 
-    burn_ange(e, dt);
-    e->fire_str *= expf(-dt * 25.f);
-
-    {
-        double s = sin((double)e->th);
-        double P = gas_P(&e->ch);
-        t_gas = (P - e->atmo) * e->area * e->r * s * (1.0 + (e->r / e->rod) * cos((double)e->th));
+        s = sin(cth);
+        P = gas_P(&c->ch);
+        tg = (P - e->atmo) * e->area * e->r * s * (1.0 + (e->r / e->rod) * cos(cth));
+        if (e->starter && e->rpm < 500.f)
+            tg *= 0.2;
+        t_gas += tg;
     }
-    t_fric = -0.012 * e->w - (e->w > 0 ? 0.35 : (e->w < 0 ? -0.35 : 0));
-    t_start = (e->starter && e->rpm < 600.f) ? 9.0 : 0;
-    alpha = (t_gas + t_fric + t_start) / 0.08;
+
+    t_fric = -0.018 * e->w - (e->w > 0 ? 0.8 : (e->w < 0 ? -0.8 : 0));
+    t_start = e->starter ? 28.0 : 0;
+    alpha = (t_gas + t_fric + t_start) / IFLY;
     e->w += (float)(alpha * dt);
-    if (e->w < -20.f)
-        e->w = -20.f;
-    if (e->w > 900.f)
-        e->w = 900.f;
+    if (e->w < 0)
+        e->w = 0;
+    if (e->w > 850.f)
+        e->w = 850.f;
     e->rpm = e->w * 60.f / (2.f * (float)M_PI);
-    if (e->rpm < 0)
-        e->rpm = 0;
-    e->p = (float)gas_P(&e->ch);
-    e->t = (float)gas_T(&e->ch);
-    e->fuel = (float)e->ch.p_fuel;
+    e->p = (float)gas_P(&e->cyl[0].ch);
+    e->t = (float)gas_T(&e->cyl[0].ch);
+    e->fuel = (float)e->cyl[0].ch.p_fuel;
+    e->fire_str *= expf(-dt * 18.f);
     e->work_acc += (float)(t_gas * e->w * dt);
 }
