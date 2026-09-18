@@ -1,5 +1,6 @@
 #ifndef CENG_H
 #define CENG_H
+#include "gas.h"
 
 typedef struct {
     /* geometry (SI) */
@@ -24,6 +25,9 @@ typedef struct {
     float tamb;      /* K ambient */
     float mix;       /* fuel richness 0.5-1.5 */
     int autostart;
+    Gas ch, man, exh; /* chamber, intake manifold, exhaust dump */
+    int lit;
+    double travel_x, travel_y, last_vol, flame_v, burn_eff;
 } Engine;
 
 void eng_init(Engine *e);
