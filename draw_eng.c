@@ -3,9 +3,9 @@
 #include <math.h>
 #include <stdio.h>
 
-void engine_draw(const Engine *e)
+void engine_draw(const Engine *e, float zoom)
 {
-    const float sc = 1400.f; /* px per metre */
+    const float sc = 1400.f * zoom;
     int cx = (int)FB_W / 2;
     int cy = (int)FB_H / 2 + 36;
     float s = sinf(e->th), c = cosf(e->th);
@@ -83,7 +83,55 @@ void hud_draw(const Engine *e)
         fill((int)FB_W - 130, 22, 120, 8, rgb565(20, 20, 20));
         fill((int)FB_W - 130, 22, tw, 8, rgb565(80, 180, 80));
     }
-    text(6, (int)FB_H - 14, "W/S thr  I ign  Space starter  R reset  Q", rgb565(160, 160, 170));
-    if (e->starter)
-        text((int)FB_W - 80, (int)FB_H - 14, "CRANK", rgb565(255, 200, 40));
+    text(6, (int)FB_H - 14, "B start  Tab menu  +/- zoom  W/S thr  I ign  Q", rgb565(160, 160, 170));
+    {
+        uint16_t go = e->autostart ? rgb565(255, 200, 40) : rgb565(40, 160, 70);
+        fill((int)FB_W - 78, (int)FB_H - 18, 72, 16, go);
+        text((int)FB_W - 72, (int)FB_H - 14, e->autostart ? "CRANK" : "START", rgb565(10, 10, 10));
+    }
+}
+
+void menu_draw(const Engine *e, int tab, int item)
+{
+    const char *tabs[] = {"Fuel", "Spark", "Air", "Geom"};
+    char line[4][48];
+    int i, x = 8, y = 40;
+    uint16_t bg = rgb565(24, 28, 40), hi = rgb565(60, 90, 160), wh = rgb565(230, 230, 230);
+    fill(4, 38, 220, 118, bg);
+    rect(4, 38, 220, 118, rgb565(90, 110, 160));
+    for (i = 0; i < 4; i++) {
+        int w = 50;
+        fill(x, y, w, 12, i == tab ? hi : rgb565(40, 44, 58));
+        text(x + 4, y + 2, tabs[i], wh);
+        x += 54;
+    }
+    if (tab == 0) {
+        snprintf(line[0], 48, "throttle  %3.0f %%", e->throttle * 100.f);
+        snprintf(line[1], 48, "mix       %.2f", e->mix);
+        snprintf(line[2], 48, "ignition  %s", e->ign ? "on" : "cut");
+        snprintf(line[3], 48, "");
+    } else if (tab == 1) {
+        snprintf(line[0], 48, "timing    %.0f deg BTDC", e->spark_deg);
+        snprintf(line[1], 48, "");
+        snprintf(line[2], 48, "");
+        snprintf(line[3], 48, "");
+    } else if (tab == 2) {
+        snprintf(line[0], 48, "atmo      %.0f kPa", e->atmo / 1000.f);
+        snprintf(line[1], 48, "air temp  %.0f C", e->tamb - 273.f);
+        snprintf(line[2], 48, "weather   %s", e->atmo > 101000.f ? "high" : (e->atmo < 90000.f ? "thin" : "std"));
+        snprintf(line[3], 48, "");
+    } else {
+        snprintf(line[0], 48, "comp      %.1f :1", e->cr);
+        snprintf(line[1], 48, "bore      %.0f mm", e->bore * 1000.f);
+        snprintf(line[2], 48, "");
+        snprintf(line[3], 48, "");
+    }
+    for (i = 0; i < 4; i++) {
+        if (!line[i][0])
+            continue;
+        if (i == item)
+            fill(8, 56 + i * 14, 210, 13, hi);
+        text(12, 58 + i * 14, line[i], wh);
+    }
+    text(12, 140, "arrows adj  Esc close", rgb565(140, 150, 170));
 }

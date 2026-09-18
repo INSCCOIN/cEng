@@ -19,10 +19,16 @@ typedef struct {
     float work_acc;
     float fire_str; /* audio */
     float exh_open;
+    float spark_deg; /* BTDC */
+    float atmo;      /* Pa */
+    float tamb;      /* K ambient */
+    float mix;       /* fuel richness 0.5-1.5 */
+    int autostart;
 } Engine;
 
 void eng_init(Engine *e);
 void eng_reset(Engine *e);
+void eng_rebuild(Engine *e);
 void eng_step(Engine *e, float dt);
 int eng_stroke(const Engine *e); /* 0 in 1 comp 2 pwr 3 exh */
 

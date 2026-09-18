@@ -38,6 +38,17 @@ static float volume(const Engine *e)
     return e->vc + e->area * x;
 }
 
+void eng_rebuild(Engine *e)
+{
+    e->r = e->stroke * 0.5f;
+    e->area = (float)M_PI * 0.25f * e->bore * e->bore;
+    if (e->cr < 6.f)
+        e->cr = 6.f;
+    if (e->cr > 14.f)
+        e->cr = 14.f;
+    e->vc = (e->area * e->stroke) / (e->cr - 1.f);
+}
+
 void eng_init(Engine *e)
 {
     e->bore = 0.086f;
@@ -47,20 +58,25 @@ void eng_init(Engine *e)
     e->area = (float)M_PI * 0.25f * e->bore * e->bore;
     e->cr = 9.0f;
     e->vc = (e->area * e->stroke) / (e->cr - 1.f);
+    e->spark_deg = 8.f;
+    e->atmo = PATM;
+    e->tamb = 293.f;
+    e->mix = 1.f;
+    e->throttle = 0.25f;
+    e->ign = 1;
     eng_reset(e);
 }
 
 void eng_reset(Engine *e)
 {
-    e->th = 3.2f * (float)M_PI; /* late compression, ready to fire */
+    e->th = 3.2f * (float)M_PI;
     e->w = 0;
-    e->p = PATM;
-    e->t = 350.f;
+    e->p = e->atmo > 1000.f ? e->atmo : PATM;
+    e->t = e->tamb > 100.f ? e->tamb : 350.f;
     e->fuel = 0;
-    e->throttle = 0.25f;
     e->rpm = 0;
-    e->ign = 1;
     e->starter = 0;
+    e->autostart = 0;
     e->fired = 0;
     e->work_acc = 0;
     e->fire_str = 0;
@@ -94,34 +110,38 @@ void eng_step(Engine *e, float dt)
         e->p = 8e6f;
 
     if (st1 == 0) { /* intake */
-        float pin = 28000.f + e->throttle * 74000.f;
+        float pin = e->atmo * (0.28f + e->throttle * 0.72f) * (e->tamb / 293.f);
         e->p += (pin - e->p) * (1.f - expf(-dt * 40.f));
-        e->fuel += (e->throttle - e->fuel) * (1.f - expf(-dt * 20.f));
+        e->fuel += (e->throttle * e->mix - e->fuel) * (1.f - expf(-dt * 20.f));
         e->fired = 0;
     } else if (st1 == 3) { /* exhaust */
-        e->p += (PATM - e->p) * (1.f - expf(-dt * 35.f));
+        e->p += (e->atmo - e->p) * (1.f - expf(-dt * 35.f));
         e->fuel *= expf(-dt * 8.f);
         e->exh_open = 1.f;
     } else
         e->exh_open *= expf(-dt * 6.f);
 
-    /* spark ~5 deg BTDC into power (theta wrap 4pi -> 0) */
-    if (e->ign && !e->fired && st0 == 1 && st1 == 2 && e->fuel > 0.08f && e->p > 180000.f) {
-        float q = 480000.f * e->fuel; /* J/m^3-ish scaled into Pa */
-        e->p += q;
-        e->fired = 1;
-        e->fire_str = 1.f;
-        e->fuel *= 0.15f;
+    /* spark N deg BTDC (end of compression) */
+    {
+        float four = 4.f * (float)M_PI;
+        float spark = four - e->spark_deg * ((float)M_PI / 180.f);
+        float th_old = wrap4pi(e->th - e->w * dt);
+        int crossed = (th_old < spark && e->th >= spark) || (th_old > e->th && e->th < 0.15f);
+        if (e->ign && !e->fired && crossed && e->fuel > 0.08f && e->p > 150000.f) {
+            float q = 480000.f * e->fuel * e->mix * (293.f / e->tamb);
+            e->p += q;
+            e->fired = 1;
+            e->fire_str = 1.f;
+            e->fuel *= 0.15f;
+        }
     }
+    (void)st0;
     e->fire_str *= expf(-dt * 25.f);
 
     /* torque from gas: F * r * sin(th) * rod factor */
     {
         float s = sinf(e->th);
-        float tanf_ = s / (sqrtf(e->rod * e->rod - e->r * e->r * s * s) / e->rod + 1e-4f);
-        t_gas = (e->p - PATM) * e->area * e->r * tanf_;
-        /* slider-crank exact-enough: F * r * sin * (1 + (r/L)cos) */
-        t_gas = (e->p - PATM) * e->area * e->r * s * (1.f + (e->r / e->rod) * cosf(e->th));
+        t_gas = (e->p - e->atmo) * e->area * e->r * s * (1.f + (e->r / e->rod) * cosf(e->th));
     }
     t_fric = -0.012f * e->w - (e->w > 0 ? 0.35f : (e->w < 0 ? -0.35f : 0));
     t_start = 0;
